@@ -1,0 +1,429 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Amasijo Cloud - Registro de pedidos de panaderia y pasteleria.
+  Frontend estatico (S3 + CloudFront), backend serverless (API Gateway + Lambda),
+  persistencia (DynamoDB), red (VPC + subred publica + EC2) y observabilidad (CloudWatch).
+
+Parameters:
+  AppName:
+    Type: String
+    Default: amasijo
+    Description: Prefijo para nombrar los recursos
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: Tipo de instancia EC2 (usa uno elegible para el plan gratuito de tu cuenta)
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Correo para alarmas de CloudWatch (opcional, dejar vacio para no crear suscripcion)
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    Description: Dias de retencion de logs (menos dias = menos costo)
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 128
+    Timeout: 10
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref OrdersTable
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # RED (Modulo 2): VPC con una subred publica
+  # ---------------------------------------------------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-igw'
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-subred-publica'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-rt-publica'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security group sin reglas de entrada: nadie puede conectarse desde Internet.
+  # La administracion se haria por AWS Systems Manager (sin abrir el puerto 22).
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Sin trafico de entrada (menor privilegio)
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-sg-ec2'
+
+  # ---------------------------------------------------------------------------
+  # EC2 (Modulo 2): instancia de pruebas. Se apaga manualmente tras el despliegue.
+  # ---------------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  TestInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref InstanceSecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      Monitoring: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-ec2-pruebas'
+
+  # ---------------------------------------------------------------------------
+  # FRONTEND (Modulo 2): bucket S3 privado + CloudFront (OAC)
+  # ---------------------------------------------------------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AppName}-frontend-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AppName}-oac-${AWS::AccountId}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AppName} frontend'
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+        Origins:
+          - Id: s3-frontend
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: s3-frontend
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          Compress: true
+          # Politica administrada "CachingOptimized"
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+  # Solo CloudFront (esta distribucion) puede leer objetos del bucket
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  # ---------------------------------------------------------------------------
+  # BASE DE DATOS: DynamoDB bajo demanda (sin costo cuando no se usa)
+  # ---------------------------------------------------------------------------
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AppName}-pedidos'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pedidoId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pedidoId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  # ---------------------------------------------------------------------------
+  # BACKEND SERVERLESS (Modulo 3): API Gateway HTTP API + 2 Lambdas
+  # Cada funcion tiene su propio rol con SOLO el permiso que necesita.
+  # ---------------------------------------------------------------------------
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub 'https://${Distribution.DomainName}'
+          - http://localhost:8080
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [Content-Type]
+        MaxAge: 600
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  CreateOrderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AppName}-crear-pedido'
+      RetentionInDays: !Ref LogRetentionDays
+
+  ListOrdersLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AppName}-listar-pedidos'
+      RetentionInDays: !Ref LogRetentionDays
+
+  CreateOrderFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: CreateOrderLogGroup
+    Properties:
+      FunctionName: !Sub '${AppName}-crear-pedido'
+      CodeUri: ../backend/
+      Handler: src/createOrder.handler
+      Description: Valida y guarda un pedido en DynamoDB
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt OrdersTable.Arn
+      Events:
+        PostOrder:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /pedidos
+            Method: POST
+
+  ListOrdersFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ListOrdersLogGroup
+    Properties:
+      FunctionName: !Sub '${AppName}-listar-pedidos'
+      CodeUri: ../backend/
+      Handler: src/listOrders.handler
+      Description: Lista los ultimos pedidos guardados
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:Scan
+              Resource: !GetAtt OrdersTable.Arn
+      Events:
+        GetOrders:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /pedidos
+            Method: GET
+
+  # ---------------------------------------------------------------------------
+  # OBSERVABILIDAD: alarmas, notificacion y dashboard en CloudWatch
+  # ---------------------------------------------------------------------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AppName}-alertas'
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  CreateOrderErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-crear-pedido-errores'
+      AlarmDescription: La Lambda de crear pedido registro errores
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CreateOrderFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-api-5xx'
+      AlarmDescription: La API devolvio errores 5xx
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref Api
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AppName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda - Invocaciones y errores",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${CreateOrderFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${CreateOrderFunction}"],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${ListOrdersFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${ListOrdersFunction}"]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda - Duracion promedio (ms)",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Average", "period": 300,
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${CreateOrderFunction}"],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${ListOrdersFunction}"]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "API Gateway - Peticiones y errores",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["AWS/ApiGateway", "Count", "ApiId", "${Api}"],
+                  ["AWS/ApiGateway", "4xx", "ApiId", "${Api}"],
+                  ["AWS/ApiGateway", "5xx", "ApiId", "${Api}"]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Pedidos creados (metrica personalizada)",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["Amasijo", "PedidosCreados", "Servicio", "crear-pedido"]
+                ]
+              }
+            }
+          ]
+        }
+
+Outputs:
+  SiteUrl:
+    Description: URL publica del frontend (CloudFront)
+    Value: !Sub 'https://${Distribution.DomainName}'
+  ApiUrl:
+    Description: URL base de la API
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  FrontendBucketName:
+    Description: Bucket S3 del frontend
+    Value: !Ref FrontendBucket
+  DistributionId:
+    Description: ID de la distribucion CloudFront (para invalidar cache)
+    Value: !Ref Distribution
+  TableName:
+    Description: Tabla DynamoDB
+    Value: !Ref OrdersTable
+  TestInstanceId:
+    Description: ID de la instancia EC2 de pruebas (apagarla despues de crearla)
+    Value: !Ref TestInstance
+  DashboardName:
+    Description: Nombre del dashboard de CloudWatch
+    Value: !Ref Dashboard

@@ -1,0 +1,91 @@
+:root {
+  --masa: #4b2e1e;
+  --crema: #f6efe6;
+  --acento: #b5651d;
+  --ok: #2e7d32;
+  --error: #b3261e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--crema);
+  color: #2b1d14;
+}
+
+header {
+  background: var(--masa);
+  color: #fff;
+  text-align: center;
+  padding: 1.5rem 1rem;
+}
+header h1 { margin: 0 0 .25rem; }
+header p { margin: 0; opacity: .85; }
+
+main {
+  max-width: 720px;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
+}
+.card h2 { margin-top: 0; }
+
+form { display: grid; gap: .9rem; }
+label { display: grid; gap: .3rem; font-weight: 600; font-size: .95rem; }
+
+input, select, textarea {
+  font: inherit;
+  padding: .55rem .65rem;
+  border: 1px solid #c9b8a8;
+  border-radius: 8px;
+  background: #fff;
+}
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--acento);
+  outline-offset: 1px;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: .65rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--acento);
+  color: #fff;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { filter: brightness(1.08); }
+button:disabled { opacity: .6; cursor: wait; }
+button.secundario { background: #e6d9ca; color: var(--masa); }
+
+.fila { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.fila h2 { margin: 0; }
+
+#mensaje { margin: 0; min-height: 1.2em; font-weight: 600; }
+#mensaje.ok { color: var(--ok); }
+#mensaje.error { color: var(--error); }
+
+#lista-pedidos { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .6rem; }
+#lista-pedidos li {
+  border: 1px solid #eadfd2;
+  border-radius: 8px;
+  padding: .65rem .8rem;
+  display: grid;
+  gap: .15rem;
+}
+#lista-pedidos .titulo { font-weight: 700; }
+#lista-pedidos .detalle { font-size: .9rem; color: #5b4636; }
+#lista-pedidos .fecha { font-size: .8rem; color: #8a7565; }
+
+footer { text-align: center; padding: 1.5rem 1rem; font-size: .85rem; color: #7a6656; }

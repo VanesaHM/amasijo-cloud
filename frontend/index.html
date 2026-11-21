@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Amasijo Cloud</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>🥐 Amasijo Cloud</h1>
+    <p>Pedidos de panadería y pastelería</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Nuevo pedido</h2>
+      <form id="form-pedido" novalidate>
+        <label>Nombre del cliente
+          <input type="text" id="cliente" minlength="2" maxlength="60" required />
+        </label>
+
+        <label>Producto
+          <select id="producto" required></select>
+        </label>
+
+        <label>Cantidad
+          <input type="number" id="cantidad" min="1" max="20" value="1" required />
+        </label>
+
+        <label>Fecha de entrega
+          <input type="date" id="fechaEntrega" required />
+        </label>
+
+        <label>Notas (opcional)
+          <textarea id="notas" maxlength="200" rows="2"></textarea>
+        </label>
+
+        <button type="submit" id="btn-enviar">Enviar pedido</button>
+        <p id="mensaje" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="fila">
+        <h2>Últimos pedidos</h2>
+        <button type="button" id="btn-recargar" class="secundario">Actualizar</button>
+      </div>
+      <p id="estado-lista">Cargando…</p>
+      <ul id="lista-pedidos"></ul>
+    </section>
+  </main>
+
+  <footer>Proyecto Cloud Computing · UdeA 2026</footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "amasijo-backend",
+  "version": "1.0.0",
+  "description": "Backend serverless de Amasijo Cloud",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/handlers.test.js"
+  }
+}
