@@ -12,8 +12,8 @@ export const handler = async (_event, deps = {}) => {
       ? { ScanCommand: class { constructor(input) { this.input = input; } } }
       : await import('@aws-sdk/lib-dynamodb');
 
-    // Scan es aceptable para un volumen pequeno. Para mas datos se usaria
-    // una clave de ordenamiento / GSI y Query (ver documento tecnico).
+    // Scan es aceptable para un volumen pequeño. Para mas datos se usaria
+    // una clave de ordenamiento / GSI y Query.
     const { Items = [] } = await db.send(
       new ScanCommand({ TableName: tableName, Limit: 200 })
     );

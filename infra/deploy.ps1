@@ -13,7 +13,6 @@ $ErrorActionPreference = "Stop"
 $infra = $PSScriptRoot
 $frontend = Join-Path (Split-Path $infra -Parent) "frontend"
 
-# Los programas externos (aws, sam) no detienen el script al fallar: hay que revisar el codigo de salida.
 function Test-Exit($paso) {
   if ($LASTEXITCODE -ne 0) { throw "Fallo el paso '$paso' (codigo $LASTEXITCODE). Revisa el mensaje de arriba." }
 }

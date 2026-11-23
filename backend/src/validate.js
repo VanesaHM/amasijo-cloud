@@ -1,5 +1,4 @@
-// Validacion de entrada del pedido. Se valida SIEMPRE en el servidor,
-// aunque el frontend tambien valide (nunca confiar en el cliente).
+// Validacion de entrada del pedido. Se valida SIEMPRE en el servidor.
 
 export const PRODUCTOS = [
   'Pan de bono (docena)',
